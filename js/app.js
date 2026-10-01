@@ -1,4 +1,4 @@
-import { getTrendingTracks, searchTracks } from './api/audius.api.js'
+
 import { recentlyPlayedTracks, trendingTracks,} from './data/mock.data.js'
 
 import { renderHome, } from './ui/home.ui.js'
@@ -7,12 +7,51 @@ import { renderHome, } from './ui/home.ui.js'
 import { renderSearch } from './ui/search.ui.js'
 import { renderEmpty, renderError, renderLoading } from './ui/states.ui.js'
 
+// import sesion 3
+import {
+  getTrackStreamUrl,
+  getTrendingTracks,
+  searchTracks
+} from './api/audius.api.js' 
+import { 
+  getNextTrack, 
+  getPreviusTrack, 
+  setQueue 
+} from './services/queue.service.js'
+import { 
+  getPlayerSnapshot, 
+  loadAudio, 
+  onPlayerEvent, 
+  pauseAudio,
+  playAudio, 
+  seekAudio, 
+  setVolume, 
+  toggleAudio 
+} from './services/player.service.js'
+
+
+import {
+  createPlayerUI
+} from './ui/player.ui.js'
+
 const app = document.querySelector('#app')
 const playerTitle = document.querySelector('#player-title')
 const playerArtist = document.querySelector('#player-artist')
 const playerCover = document.querySelector('#player-cover')
 const playButton = document.querySelector('#play-button')
 const globalSearch = document.querySelector('#global-search')
+
+// constantes de sesion 03
+const previousButton = document.querySelector('#previous-button')
+const nextButton = document.querySelector('#next-button')
+const progressRange = document.querySelector('#progress-range')
+const volumeRange = document.querySelector('#volume-range')
+
+const playerUI = createPlayerUI()
+
+const currentTimeLabel = document.querySelector('#current-time')
+const durationTimeLabel = document.querySelector('#duration-time')
+
 
 const allTracks = [
   ...trendingTracks,
@@ -24,18 +63,17 @@ const state = {
   currentTrack: null,
   trendingTracks: [],
   isPlaying: false,
-  // parametros nuevos 
   searchResults : [],
   searchQuery: ''
 }
 
 async function initializeApp() {
-  // renderCurrentView()
   registerNavigationEvents()
   registerGlobalEvents()
-  // updatePlayer()
-  // updateNavigationStyles()
+  registerPlayerEvents()
+  setVolume(Number(volumeRange.value))
   await loadHome()
+
 }
 
 async function loadHome() {
@@ -47,22 +85,13 @@ async function loadHome() {
   updateNavigationStyles()
   try {
     state.trendingTracks = await getTrendingTracks()
-    if (state.trendingTracks.length === 0) {
-      renderEmpty ({
-        target: app,
-        title: 'No hay tendencias disponibles',
-        message: 'Audius no tiene tendencias disponibles'
-      })
-    }
+
     renderHome({
       target: app,
       trendingTracks: state.trendingTracks,
-      recentlyPlayedTracks: state.trendingTracks.slice
+      recentlyPlayedTracks: state.trendingTracks.slice(0,4)
     })
-    if (!state.currentTrack) {
-      state.currentTrack = state.trendingTracks[0]
-      updatePlayer()
-    }
+
   } catch (error) {
     console.error(error)
     renderError({
@@ -76,13 +105,12 @@ async function loadHome() {
 async function executeSearch(query){
   const normalizeQuery = query.trim()
   state.currentView = 'search'
-  state.searchQuery = normalizeQuery
   updateNavigationStyles()
   if (normalizeQuery.length < 2) {
     renderEmpty({
       target: app,
       title: 'Escribe una busqueda',
-      messaje: 'Utiliza al menos 2 caracteres para la busqueda'
+      message: 'Utiliza al menos 2 caracteres para la busqueda'
     })
     return
   }
@@ -116,6 +144,149 @@ async function executeSearch(query){
     })
   }
 }
+ // funcion register player events
+function registerPlayerEvents() {
+  onPlayerEvent('play', () => {
+    state.isPlaying = true
+    updatePlayer()
+  })
+
+  onPlayerEvent('pause', () => {
+    state.isPlaying = false
+    updatePlayer()
+  })
+
+  onPlayerEvent('ended', async () => {
+    const nextTrack = getNextTrack()
+
+    if (!nextTrack) {
+      state.isPlaying = false
+      updatePlayer()
+      return
+    }
+
+    await loadAndPlayTrack(nextTrack)
+  })
+
+  onPlayerEvent('timeupdate', ({ currentTime, duration }) => {
+    currentTimeLabel.textContent = formatTime(currentTime)
+    durationTimeLabel.textContent = formatTime(duration)
+
+    const progress = duration ? (currentTime / duration) * 100 : 0
+    progressRange.value = String(Math.min(100, Math.max(0, progress)))
+  })
+
+  onPlayerEvent('metadata', ({ duration }) => {
+    currentTimeLabel.textContent = '0:00'
+    durationTimeLabel.textContent = formatTime(duration)
+    progressRange.value = '0'
+  })
+
+  onPlayerEvent('error', (error) => {
+    console.error(
+      'Error del reproductor:',
+      error,
+    )
+
+    state.isPlaying = false
+    updatePlayer()
+  })
+}
+
+// funcion sesion 3
+function getActiveCollection() {
+  if(state.currentView === 'search' && state.searchResults.length > 0) {
+    return state.searchResults
+  }
+  return state.trendingTracks
+}
+
+async function playTrack(trackId) {
+  const tracks = getActiveCollection()
+  const track = tracks.find((item) => item.id === trackId)
+  if(!track){
+    return
+  } 
+  if (track.isStreamable === false) {
+    alert('La cancion no esta disponible')
+    return
+  } 
+  setQueue(tracks, track.id)
+  await loadAndPlayTrack(track)
+}
+
+async function loadAndPlayTrack(track) {
+  try {
+    state.currentTrack = track
+    playerUI.renderTrack(track)
+    const streamUrl = getTrackStreamUrl(track.id)
+    loadAudio(streamUrl)
+    await playAudio()
+  } catch (error) {
+    alert(`No es posible reproducir la cancion ${error}`)
+  }
+}
+
+async function playNextTrack() {
+  const track = getNextTrack()
+  if(!track){
+    return
+  }
+  await loadAndPlayTrack(track)
+}
+
+async function playPreviousTrack() {
+  const snapshot = getPlayerSnapshot()
+  if (snapshot.currentTime > 3) {
+    seekAudio(0)
+    return
+  }
+  const track = getPreviusTrack()
+  if (!track) {
+    return
+  }
+  await loadAndPlayTrack(track)
+}
+
+function registerPlayerTrack(track){
+  onPlayerEvent('play', () => {
+    state.isPlaying = true
+    playerUI.renderPlaying(true)
+  })
+  onPlayerEvent('pause', () => {
+    state.isPlaying = false
+    playerUI.renderPlaying(false)
+  })
+
+  onPlayerEvent('timeupdate', (payload) => {
+    playerUI.renderProgress(payload)
+  })
+  onPlayerEvent('metadata', ({ duration }) => {
+    playerUI.renderProgress({
+      currentTime: 0,
+      duration
+    })
+  })
+
+  onPlayerEvent('volumechage', ({volume}) => {
+    playerUI.renderVolume(volume)
+  })
+
+  onPlayerEvent('end', playNextTrack)
+  onPlayerEvent('error', (error) => {
+    console.error('Audio error:', error)
+  })
+}
+
+function formatTime(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) return '0:00'
+  const minutes = Math.floor(seconds / 60)
+  const secs = Math.floor(seconds % 60)
+  return `${minutes}:${String(secs).padStart(2, '0')}`
+}
+
+
+
 
 function renderLibraryPlaceholder() {
   state.currentView = 'library',
@@ -273,7 +444,7 @@ function registerGlobalEvents() {
         return
       }
 
-      selectTrack(playTrackButton.dataset.trackId,)
+      playTrack(playTrackButton.dataset.trackId,)
     },
   )
 
@@ -285,10 +456,24 @@ function registerGlobalEvents() {
     executeSearch(globalSearch.value)
   })
 
-  playButton.addEventListener('click', () => {
-    state.isPlaying = !state.isPlaying
-    updatePlayer()
+  playButton.addEventListener('click', async () => {
+    if (!state.currentTrack) return
+    await toggleAudio()
   })
+
+  previousButton.addEventListener('click', playPreviousTrack)
+  nextButton.addEventListener('click', playNextTrack)
+
+  progressRange.addEventListener('input', () => {
+    const { duration } = getPlayerSnapshot()
+    if (!duration || !Number.isFinite(duration)) return
+    seekAudio((Number(progressRange.value) / 100) * duration)
+  })
+
+  volumeRange.addEventListener('input', () => {
+    setVolume(Number(volumeRange.value))
+  })
+
 }
 
 function getVisibleTracks() {
