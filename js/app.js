@@ -34,6 +34,26 @@ import {
   createPlayerUI
 } from './ui/player.ui.js'
 
+
+// sesion 4
+import {
+  addToHistory,
+  getFavorites,
+  getHistory,
+  getLastTrack,
+  getVolume,
+  isFavorite,
+  saveLastTrack,
+  saveVolume,
+  toggleFavorite,
+} from './services/storage.service.js'
+
+import {
+  renderLibrary,
+} from './ui/library.ui.js'
+
+
+
 const app = document.querySelector('#app')
 const playerTitle = document.querySelector('#player-title')
 const playerArtist = document.querySelector('#player-artist')
@@ -53,27 +73,43 @@ const currentTimeLabel = document.querySelector('#current-time')
 const durationTimeLabel = document.querySelector('#duration-time')
 
 
+
 const allTracks = [
   ...trendingTracks,
   ...recentlyPlayedTracks,
 ]
 
+// Modificado en sesion 4
 const state = {
   currentView: 'home',
   currentTrack: null,
   trendingTracks: [],
+  searchResults: [],
+  favorites: [],
+  history: [],
   isPlaying: false,
-  searchResults : [],
-  searchQuery: ''
 }
 
+
 async function initializeApp() {
+  state.favorites =
+    getFavorites()
+
+  state.history =
+    getHistory()
+
+  const savedVolume =
+    getVolume()
+
+  setVolume(savedVolume)
+
   registerNavigationEvents()
   registerGlobalEvents()
   registerPlayerEvents()
-  setVolume(Number(volumeRange.value))
+
   await loadHome()
 
+  restoreLastTrack()
 }
 
 async function loadHome() {
@@ -182,7 +218,7 @@ function registerPlayerEvents() {
     progressRange.value = '0'
   })
 
-  onPlayerEvent('error', (error) => {
+    onPlayerEvent('error', (error) => {
     console.error(
       'Error del reproductor:',
       error,
@@ -191,8 +227,26 @@ function registerPlayerEvents() {
     state.isPlaying = false
     updatePlayer()
   })
-}
 
+  const playerFavoriteButton =
+    document.querySelector(
+      '#player-favorite-button',
+    )
+
+  playerFavoriteButton
+    ?.addEventListener(
+      'click',
+      () => {
+        if (!state.currentTrack) {
+          return
+        }
+
+        handleFavorite(
+          state.currentTrack.id,
+        )
+      },
+    )
+}
 // funcion sesion 3
 function getActiveCollection() {
   if(state.currentView === 'search' && state.searchResults.length > 0) {
@@ -217,11 +271,16 @@ async function playTrack(trackId) {
 
 async function loadAndPlayTrack(track) {
   try {
-    state.currentTrack = track
-    playerUI.renderTrack(track)
     const streamUrl = getTrackStreamUrl(track.id)
     loadAudio(streamUrl)
     await playAudio()
+
+    state.currentTrack = track
+    state.history = addToHistory(track)
+    saveLastTrack(track)
+
+    playerUI.renderTrack(track)
+    playerUI.renderFavorite(isFavorite(track.id))
   } catch (error) {
     alert(`No es posible reproducir la cancion ${error}`)
   }
@@ -385,7 +444,7 @@ function registerNavigationEvents() {
           return
         }
         if (view === 'library'){
-          renderLibraryPlaceholder()
+          renderLibraryView()
           return
         }
         if (view === 'search'){
@@ -438,15 +497,28 @@ function updateNavigationStyles() {
 
 function registerGlobalEvents() {
   document.addEventListener('click', (event) => {
-      const playTrackButton = event.target.closest('.play-track')
+    const favoriteButton =
+      event.target.closest(
+        '.favorite-track',
+      )
 
-      if (!playTrackButton) {
-        return
-      }
+    if (favoriteButton) {
+      handleFavorite(
+        favoriteButton.dataset.trackId,
+      )
 
-      playTrack(playTrackButton.dataset.trackId,)
-    },
-  )
+      return
+    }
+
+    const playTrackButton = event.target.closest('.play-track')
+
+    if (!playTrackButton) {
+      return
+    }
+
+    playTrack(playTrackButton.dataset.trackId)
+  }
+)
 
   globalSearch.addEventListener('keydown', (event) => {
     if (event.key !== 'Enter'){
@@ -470,9 +542,18 @@ function registerGlobalEvents() {
     seekAudio((Number(progressRange.value) / 100) * duration)
   })
 
-  volumeRange.addEventListener('input', () => {
-    setVolume(Number(volumeRange.value))
-  })
+  volumeRange.addEventListener(
+    'input',
+    () => {
+      const volume =
+        Number(
+          volumeRange.value,
+        )
+
+      setVolume(volume)
+      saveVolume(volume)
+    },
+  )
 
 }
 
@@ -515,6 +596,90 @@ function updatePlayer() {
       ? 'Pausar'
       : 'Reproducir',
   )
+}
+
+function restoreLastTrack() {
+  const track =
+    getLastTrack()
+
+  if (!track) {
+    return
+  }
+
+  state.currentTrack =
+    track
+
+  playerUI.renderTrack(
+    track,
+  )
+
+  playerUI.renderFavorite(
+    isFavorite(track.id),
+  )
+}
+
+function handleFavorite(
+  trackId,
+) {
+  const track =
+    getAllKnownTracks()
+      .find(
+        (item) =>
+          item.id === trackId,
+      )
+
+  if (!track) {
+    return
+  }
+
+  state.favorites =
+    toggleFavorite(track)
+
+  if (
+    state.currentTrack?.id
+    === track.id
+  ) {
+    playerUI.renderFavorite(
+      isFavorite(track.id),
+    )
+  }
+
+  if (
+    state.currentView
+    === 'library'
+  ) {
+    renderLibraryView()
+  }
+}
+
+function getAllKnownTracks() {
+  return [
+    ...state.trendingTracks,
+    ...state.searchResults,
+    ...state.favorites,
+    ...state.history,
+  ]
+}
+
+function renderLibraryView() {
+  state.currentView =
+    'library'
+
+  state.favorites =
+    getFavorites()
+
+  state.history =
+    getHistory()
+
+  renderLibrary({
+    target: app,
+    favorites:
+      state.favorites,
+    history:
+      state.history,
+  })
+
+  updateNavigationStyles()
 }
 
 initializeApp()
